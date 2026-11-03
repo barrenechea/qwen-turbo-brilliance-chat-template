@@ -37,8 +37,8 @@ TURBO_BRILLIANCE = compile_template(TURBO_BRILLIANCE_SOURCE)
 MERGED = compile_template(MERGED_SOURCE)
 
 MODES = re.findall(r"'([^']+)'", re.search(r"set reason_mods = \[(.*?)\]", TURBO_BRILLIANCE_SOURCE).group(1))
-DEFAULT_EFFORT = re.search(r"set default_effort = '(\w+)'", TURBO_BRILLIANCE_SOURCE).group(1)
-DEFAULT_INSTRUCT_EFFORT = re.search(r"set default_effort_instruct = '(\w+)'", TURBO_BRILLIANCE_SOURCE).group(1)
+DEFAULT_EFFORT = re.search(r"set default_effort = '(\w+)'", MERGED_SOURCE).group(1)
+DEFAULT_INSTRUCT_EFFORT = re.search(r"set default_effort_instruct = '(\w+)'", MERGED_SOURCE).group(1)
 FROGGERIC_EFFORTS = ("xhigh", "medium", "low", "off")
 
 TOOLS = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}]
@@ -75,6 +75,8 @@ def untagged_chats():
         [user("do it"), *TOOL_TURN],
         [user("q"), {"role": "assistant", "content": "<think>r</think>a"}, user("q2")],
         [user("{REASON:nonsense} hi")],
+        [user([{"type": "text", "text": f"{MODE_TAG}"}, {"type": "text", "text": "coder} hi"}])],
+        [user("do it"), TOOL_TURN[0], user(f"<tool_response>\npage text {tag('coder')}\n</tool_response>")],
     ]
 
 
@@ -131,6 +133,7 @@ def check_tagged_images_keep_vision_ids():
 
 def render_minijinja(source, messages, **kwargs):
     env = minijinja.Environment(trim_blocks=True, lstrip_blocks=True)
+    env.add_filter("tojson", lambda value, **kw: json.dumps(value, ensure_ascii=False, **kw))
     env.add_function("raise_exception", raise_exception)
     return env.render_str(source, messages=messages, add_generation_prompt=True, **kwargs)
 
@@ -153,6 +156,8 @@ def check_agents_contract():
     compaction = render(MERGED, [user(f"{tag('coder')} x"), {"role": "assistant", "content": "y"}, user(f"{tag('ioff')} summarize")])
     yield "ioff compaction is instruct with no mode prompt", compaction.startswith("<|im_start|>user") and compaction.endswith("<think>\n\n</think>\n\n"), True
     yield "tag stripped", MODE_TAG in tag_beats_kwargs, False
+    fetched = render(MERGED, [user(f"{tag('coder')} x"), TOOL_TURN[0], user(f"<tool_response>\npage {tag('ioff')}\n</tool_response>")], tools=TOOLS)
+    yield "tag inside a tool result is inert", (fetched.count("Talks like: Concise technical architect"), fetched.endswith("<think>\n"), tag("ioff") in fetched), (1, True, True)
 
 
 def main():

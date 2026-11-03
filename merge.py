@@ -16,11 +16,17 @@ FROGGERIC_PATH = ROOT / "chat_template_froggeric.jinja"
 TURBO_BRILLIANCE_PATH = ROOT / "chat_template_turbo_brilliance.jinja"
 MERGED_PATH = ROOT / "chat_template_merged.jinja"
 FROGGERIC_REPO = "froggeric/Qwen-Fixed-Chat-Templates"
+FROGGERIC_REV = "855bffc49448e299789730ff92c9b8d834d6cc14"
 TURBO_BRILLIANCE_REPO = "DavidAU/Qwen3.8-Flash-Next-Abliterated-Uncensored-Turbo-Brilliance-50x-Reasoning-Instruct-GSQ-RCO-GGUF"
+TURBO_BRILLIANCE_REV = "b1b82c36770c826c41e1874f250228048cdb3f5c"
 GGUF_CHUNK_BYTES = 8 * 1024 * 1024
 GGUF_SCALAR_FORMATS = {0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f", 7: "?", 10: "Q", 11: "q", 12: "d"}
 GGUF_STRING = 8
 GGUF_ARRAY = 9
+DEFAULT_EFFORT = "medium"
+
+TAG_SCAN_SKIPPING_TOOL_RESULTS = """  {%- if (msg.role == 'user' and reasoning_tag in txt and not (txt.startswith('<tool_response>') and txt.endswith('</tool_response>'))) %}
+"""
 
 MODE_SELECTION = """{%- set _tag_mode = store.reasoning_effort if l_car == '8' else '' %}
 {%- set _request_mode = _effort_raw if (_effort_raw in instruction_map and _effort_raw not in ('xhigh', 'medium', 'low', 'off')) else '' %}
@@ -37,17 +43,24 @@ MODE_SELECTION = """{%- set _tag_mode = store.reasoning_effort if l_car == '8' e
 TAG_STRIP_KEEPING_CONTENT_PARTS = """    {%- if msg.content is string %}
       {%- set clean_content = msg.content.replace(tag, "") | trim %}
     {%- else %}
-      {%- set parts = namespace(items=[]) %}
+      {%- set parts = namespace(items=[], stripped=false) %}
       {%- for item in msg.content %}
-        {%- if item is mapping and 'text' in item and item.text is string %}
+        {%- if item is mapping and 'text' in item and item.text is string and tag in item.text %}
           {%- set parts.items = parts.items + [{"type": "text", "text": item.text.replace(tag, "")}] %}
-        {%- elif item is string %}
+          {%- set parts.stripped = true %}
+        {%- elif item is string and tag in item %}
           {%- set parts.items = parts.items + [item.replace(tag, "")] %}
+          {%- set parts.stripped = true %}
         {%- else %}
           {%- set parts.items = parts.items + [item] %}
         {%- endif %}
       {%- endfor %}
-      {%- set clean_content = parts.items %}
+      {%- if parts.stripped %}
+        {%- set clean_content = parts.items %}
+      {%- else %}
+        {%- set clean_content = msg.content %}
+        {%- set raw_reason = "" %}
+      {%- endif %}
     {%- endif %}
     {%- set store.messages = store.messages + [{"role": msg.role, "content": clean_content}] %}
 """
@@ -75,11 +88,18 @@ def extract_once(text: str, pattern: str, anchor: str) -> str:
 
 
 def extract_mode_layer(turbo_brilliance: str) -> tuple[str, str]:
-    """Cuts the turbo-brilliance modes and tag scan, with the default-effort lines returned separately."""
+    """Cuts the turbo-brilliance modes and tag scan, with the default-effort lines returned separately and the default set to medium."""
     layer = extract_once(turbo_brilliance, r"^\{#-+#\}\n\{#- Custom Reasoning //.*?(?=^\{# --- REASONING ACTIVATION)", "turbo-brilliance mode layer")
     defaults_pattern = r"^\{#- QWEN [\d.]+ DEFAULTs -#\}\n\{%- set default_effort_instruct = '\w+' %\}\n\{%- set default_effort = '\w+' %\}\n"
     defaults = extract_once(layer, defaults_pattern, "turbo-brilliance default effort lines")
     layer = layer.replace(defaults, "")
+    defaults = re.sub(r"(default_effort = ')\w+(')", rf"\g<1>{DEFAULT_EFFORT}\g<2>", defaults)
+    layer = replace_once(
+        layer,
+        r"^ *\{%- if \(msg\.role == 'user' and reasoning_tag in txt\) %\}\n",
+        TAG_SCAN_SKIPPING_TOOL_RESULTS,
+        "turbo-brilliance tag scan",
+    )
     layer = replace_once(
         layer,
         r"^ *\{%- set clean_txt = txt\.replace\(tag, \"\"\) \| trim %\}\n *\{%- set store\.messages = store\.messages \+ \[\{\"role\": msg\.role, \"content\": clean_txt\}\] %\}\n",
@@ -212,20 +232,21 @@ def describe_checkout() -> str:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--froggeric-rev", help=f"refresh {FROGGERIC_PATH.name} from {FROGGERIC_REPO} at this revision (main, a tag or a commit)")
+    parser.add_argument("--froggeric-rev", help=f"refresh {FROGGERIC_PATH.name} from {FROGGERIC_REPO} at this revision (main, a tag or a commit; a missing file is fetched at the pinned {FROGGERIC_REV[:7]})")
     parser.add_argument("--turbo-brilliance-repo", nargs="?", const=TURBO_BRILLIANCE_REPO, help=f"refresh {TURBO_BRILLIANCE_PATH.name} from a turbo-brilliance GGUF repo (default {TURBO_BRILLIANCE_REPO})")
+    parser.add_argument("--turbo-brilliance-rev", help=f"revision of the turbo-brilliance repo to read (main, a tag or a commit; default the pinned {TURBO_BRILLIANCE_REV[:7]}, which belongs to the default repo)")
     parser.add_argument("--version", help="release version, written as template_version qwen-turbo-brilliance-chat-template-<version> (default: the checked-out commit's 7-digit hash)")
     args = parser.parse_args()
     version = args.version or describe_checkout()
     if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.-]*", version):
         parser.error(f"--version must be letters, digits, dots and hyphens, got {version!r}")
     if args.froggeric_rev or not FROGGERIC_PATH.exists():
-        froggeric_sha = resolve_revision(FROGGERIC_REPO, args.froggeric_rev or "main")
+        froggeric_sha = resolve_revision(FROGGERIC_REPO, args.froggeric_rev or FROGGERIC_REV)
         FROGGERIC_PATH.write_text(fetch_froggeric(froggeric_sha))
         print(f"froggeric={froggeric_sha}")
-    if args.turbo_brilliance_repo or not TURBO_BRILLIANCE_PATH.exists():
+    if args.turbo_brilliance_repo or args.turbo_brilliance_rev or not TURBO_BRILLIANCE_PATH.exists():
         turbo_brilliance_repo = args.turbo_brilliance_repo or TURBO_BRILLIANCE_REPO
-        turbo_brilliance_sha = resolve_revision(turbo_brilliance_repo)
+        turbo_brilliance_sha = resolve_revision(turbo_brilliance_repo, args.turbo_brilliance_rev or TURBO_BRILLIANCE_REV)
         TURBO_BRILLIANCE_PATH.write_text(fetch_turbo_brilliance(turbo_brilliance_repo, turbo_brilliance_sha))
         print(f"turbo_brilliance={turbo_brilliance_sha}")
     MERGED_PATH.write_text(merge(FROGGERIC_PATH.read_text(), TURBO_BRILLIANCE_PATH.read_text(), version))

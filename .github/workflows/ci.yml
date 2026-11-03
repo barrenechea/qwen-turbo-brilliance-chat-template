@@ -38,7 +38,7 @@ jobs:
       - name: Merge templates
         env:
           HF_TOKEN: ${{ secrets.HF_READ_TOKEN }}
-        run: python merge.py --froggeric-rev main --turbo-brilliance-repo
+        run: python merge.py --froggeric-rev main --turbo-brilliance-repo --turbo-brilliance-rev main
 
       - name: Run checks
         run: python check.py

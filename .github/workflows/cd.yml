@@ -36,7 +36,7 @@ jobs:
         id: upstream
         env:
           HF_TOKEN: ${{ secrets.HF_READ_TOKEN }}
-        run: python merge.py --froggeric-rev main --turbo-brilliance-repo --version "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+        run: python merge.py --version "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Run checks
         run: python check.py
