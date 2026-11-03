@@ -1,41 +1,95 @@
-# froggeric + turbo-brilliance chat template merger
+# Turbo-Brilliance Chat Template for Qwen 3.5, 3.6 & 3.8
 
-Builds `chat_template_merged.jinja` from two parents:
+A drop-in `chat_template.jinja` for Qwen 3.5, 3.6 and 3.8, including [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next), Qwen's preview of the Qwen4 architecture. It combines two templates:
 
-- `chat_template_froggeric.jinja`: the [froggeric fixed Qwen template](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates), used as the base.
-- `chat_template_turbo_brilliance.jinja`: the DavidAU turbo-brilliance template, embedded in the model GGUF. It adds the `{REASON:<mode>}` modes that [turbo-brilliance-agents](https://github.com/barrenechea/turbo-brilliance-agents) relies on.
+- **[froggeric's fixed Qwen template](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates)** as the base: tool calling (XML or JSON), thinking control, history handling and engine fixes.
+- **DavidAU's [Turbo-Brilliance](https://huggingface.co/collections/DavidAU/turbo-brilliance-ai-constructs-50x-reasoning-instruct-6ad18e0e214376f367ecccd1) reasoning modes**: 41 modes (personas, reasoning frameworks, expert panels) you switch per prompt with `{REASON:<mode>}`.
+
+The modes are plain system prompts, so they work on every supported model. DavidAU tuned them on Qwen 3.8, and the default `xhigh` effort uses Qwen 3.8's steering sentence.
 
 ## Usage
 
-```sh
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+**llama.cpp**
 
-python3 merge.py                                         # merge the local parents, fetching any that are missing
-python3 merge.py --froggeric-rev main                    # refresh froggeric first (branch, tag or commit)
-python3 merge.py --turbo-brilliance-repo                 # refresh turbo-brilliance from the default GGUF repo
-python3 merge.py --turbo-brilliance-repo DavidAU/<repo>  # or from another turbo-brilliance model
-.venv/bin/python check.py                                # verify the result
+```sh
+llama-server -m model.gguf --jinja --chat-template-file chat_template.jinja
 ```
 
-`merge.py` authenticates with your Hugging Face token when one is available (`HF_TOKEN`, or the token saved by `hf auth login`), which avoids anonymous rate limits. All `.jinja` files are gitignored. The parents are fetched on the first run and kept locally until you refresh them. Fetching turbo-brilliance reads only the GGUF metadata header (a few MB), not the weights.
+**vLLM**
 
-## What the merge does
+```sh
+vllm serve <model> --chat-template chat_template.jinja
+```
 
-1. Moves froggeric's `render_content` macro up, so the turbo-brilliance tag scan can use it.
-2. Inserts the turbo-brilliance mode prompts and the `{REASON:}` tag scan before froggeric's `<|think_*|>` scan.
-3. Moves the turbo-brilliance `default_effort` / `default_effort_instruct` lines to the top. They are the only server-wide default.
-4. Selects the mode: a valid tag wins over everything. Otherwise a turbo-brilliance mode name in `reasoning_effort` (or in the defaults) applies. Anything else falls back to froggeric's effort handling.
-5. Strips the tag inside each content part, so images in a tagged message keep their `add_vision_id` numbering.
-6. Guards froggeric's reverse scan against an empty message list ([froggeric#109](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates/discussions/109)). Without it, a system-only request panics minijinja and kills vLLM's Rust frontend. The patch is skipped once upstream guards the loop itself.
+**transformers**
 
-Every edit is anchored on upstream text that must match exactly once. If upstream restructures, `merge.py` stops and names the anchor that broke, instead of writing a corrupt template.
+```python
+tokenizer.chat_template = open("chat_template.jinja").read()
+```
 
-## What `check.py` verifies
+**[Strata](https://github.com/Niko1221/Strata)**
 
-- With a tag, every turbo-brilliance mode renders exactly as turbo-brilliance does (tool-free chats).
-- Without a tag, the output equals froggeric's across a matrix of `enable_thinking`, `reasoning_effort`, `tool_call_format`, tools, multiple system prompts and `<|think_*|>` tokens.
-- Mode names in `reasoning_effort`, and edited defaults, behave as in turbo-brilliance.
-- minijinja (vLLM's Rust frontend) renders the same bytes as Jinja2, including a system-only request.
-- The turbo-brilliance-agents contract: last tag wins, a tag beats request settings, it survives tool turns, `{REASON:ioff}` gives instruct mode, and the tag is stripped.
+The Strata app and CLI both read the template from the model's prepared pack. Set the model up, stop it, replace the template and start it again. `strata models list` shows where your models are.
 
-Froggeric v22 to v22.2 merge cleanly but fail the "same as turbo-brilliance" checks on multi-turn chats. Before v22.3, froggeric dropped empty `<think>` blocks from past assistant turns, and turbo-brilliance keeps them.
+```sh
+# Linux / macOS
+cp chat_template.jinja <pack>/tokenizer/chat_template.jinja
+```
+
+```powershell
+# Windows (PowerShell)
+Copy-Item chat_template.jinja <pack>\tokenizer\chat_template.jinja
+```
+
+For a source install, use the `tokenizer` folder named in your config JSON.
+
+## Selecting a mode
+
+Put a tag anywhere in a **user** message. The template removes it before the model sees the prompt.
+
+| Tag | Effect |
+|---|---|
+| `{REASON:coder}` | `coder` mode with thinking on |
+| `{REASON:icoder}` | `coder` mode with thinking off (instruct) |
+| `{REASON:off}` | no mode prompt, thinking on |
+| `{REASON:ioff}` | no mode prompt, thinking off |
+
+- The last tagged user message wins, so a tag in the first message stays active through every tool call.
+- A tag overrides request settings such as `enable_thinking` and `reasoning_effort`.
+- Tags in system messages are ignored.
+- Without a tag, a mode name also works as `reasoning_effort` (e.g. through `chat_template_kwargs`) on engines that pass it through.
+- Without a mode, thinking defaults to `xhigh` effort. To change that, edit `default_effort` / `default_effort_instruct` at the top of the template.
+
+## Modes
+
+| Group | Modes |
+|---|---|
+| Reasoning frameworks | `omni`, `deeptree`, `hyper`, `socrates`, `logic`, `einstein`, `spoon`, `ultra` |
+| Same frameworks combined with xhigh effort | `xomni`, `xdeeptree`, `xhyper`, `xsocrates`, `xlogic`, `xeinstein`, `xspoon`, `xhelp` |
+| Experts and agents | `holodeck`, `prompt`, `musk`, `curie`, `007`, `joe` |
+| Characters and points of view | `pkd`, `neo`, `stark`, `matlock`, `house`, `vader`, `joker`, `quinn` |
+| Multi-persona specialists | `brainstorm`, `business`, `coder`, `comedy`, `story`, `teacher` |
+| Qwen effort levels | `xhigh`, `medium`, `low` |
+| Other | `help`, `off` |
+
+Send `{REASON:help}` and the model explains each mode and which fits your task.
+
+## What every release is checked for
+
+- With a tag, every mode renders byte for byte like DavidAU's template.
+- Without a tag, the output matches froggeric's template across thinking, effort, tool-call format, tools, multiple system prompts and inline `<|think_*|>` tokens.
+- Jinja2 (transformers) and minijinja (vLLM's Rust frontend) render the same prompt. llama.cpp was checked by hand and matches.
+
+On top of both parents, it also:
+
+- keeps `add_vision_id` image numbering right when a tagged message has images,
+- stops a system-only request from crashing vLLM's Rust frontend ([froggeric#109](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates/discussions/109)).
+
+## Works with
+
+[turbo-brilliance-agents](https://github.com/barrenechea/turbo-brilliance-agents): opencode subagents that each run on one Turbo-Brilliance mode.
+
+## Credits and license
+
+- Base template by [froggeric](https://huggingface.co/froggeric), Apache-2.0.
+- Turbo-Brilliance modes and prompts by [DavidAU](https://huggingface.co/DavidAU) (David Belton), under his terms. See the notice in the template and his [model cards](https://huggingface.co/DavidAU).

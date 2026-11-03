@@ -1,0 +1,99 @@
+name: Continuous Delivery
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build template
+    runs-on: ubuntu-latest
+    outputs:
+      message: ${{ steps.message.outputs.message }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Merge templates
+        id: upstream
+        env:
+          HF_TOKEN: ${{ secrets.HF_READ_TOKEN }}
+        run: python merge.py --froggeric-rev main --turbo-brilliance-repo --version "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Run checks
+        run: python check.py
+
+      - name: Build release
+        id: message
+        env:
+          FROGGERIC_SHA: ${{ steps.upstream.outputs.froggeric }}
+          TURBO_BRILLIANCE_SHA: ${{ steps.upstream.outputs.turbo_brilliance }}
+        run: |
+          mkdir release
+          cp chat_template_merged.jinja release/chat_template.jinja
+          { echo ---; cat hf-metadata.yml; echo ---; echo; cat README.md; } > release/README.md
+          echo "message=release ${GITHUB_REF_NAME}: froggeric@${FROGGERIC_SHA::7} + turbo-brilliance@${TURBO_BRILLIANCE_SHA::7} (${GITHUB_REPOSITORY}@${GITHUB_SHA::7})" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release
+        uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+
+  release:
+    name: Release to Hugging Face
+    needs: build
+    runs-on: ubuntu-latest
+    environment: huggingface
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: requirements-release.txt
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - name: Install dependencies
+        run: pip install -r requirements-release.txt
+
+      - name: Download release
+        uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: release
+
+      - name: Upload to Hugging Face
+        env:
+          HF_OIDC_RESOURCE: ${{ vars.HF_REPO }}
+          MESSAGE: ${{ needs.build.outputs.message }}
+        run: |
+          : "${HF_OIDC_RESOURCE:?set the HF_REPO repository variable}"
+          hf upload "$HF_OIDC_RESOURCE" release . --private --commit-message "$MESSAGE"

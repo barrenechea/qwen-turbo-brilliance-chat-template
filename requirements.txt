@@ -1,2 +1,2 @@
-jinja2
-minijinja
+jinja2==3.1.6
+minijinja==3.0.5
