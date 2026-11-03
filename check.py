@@ -6,6 +6,7 @@ import re
 import sys
 from pathlib import Path
 
+import minijinja
 from jinja2.ext import loopcontrols
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -128,6 +129,21 @@ def check_tagged_images_keep_vision_ids():
     yield "vision ids count images in tagged messages", render(MERGED, tagged, add_vision_id=True), expected
 
 
+def render_minijinja(source, messages, **kwargs):
+    env = minijinja.Environment(trim_blocks=True, lstrip_blocks=True)
+    env.add_function("raise_exception", raise_exception)
+    return env.render_str(source, messages=messages, add_generation_prompt=True, **kwargs)
+
+
+def check_minijinja_matches_jinja2():
+    chats = [*tagged_chats("coder"), *tagged_chats("ioff"), *untagged_chats()]
+    for messages, tools in itertools.product(chats, (None, TOOLS)):
+        kwargs = drop_none({"tools": tools})
+        yield f"minijinja {messages[-1]['content']!r} tools={bool(tools)}", render_minijinja(MERGED_SOURCE, messages, **kwargs), render(MERGED, messages, **kwargs)
+    system_only = [{"role": "system", "content": "x"}]
+    yield "minijinja system-only request", render_minijinja(MERGED_SOURCE, system_only), render(MERGED, system_only)
+
+
 def check_agents_contract():
     coder_prompt = render(TURBO_BRILLIANCE, [user(f"{tag('coder')} x")])
     tag_beats_kwargs = render(MERGED, [user(f"{tag('coder')} x")], reasoning_effort="low", enable_thinking=False)
@@ -146,6 +162,7 @@ def main():
         check_request_modes_match_turbo_brilliance,
         check_edited_defaults_match_turbo_brilliance,
         check_tagged_images_keep_vision_ids,
+        check_minijinja_matches_jinja2,
         check_agents_contract,
     )
     failures = 0

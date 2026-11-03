@@ -26,6 +26,7 @@ python3 merge.py --turbo-brilliance-repo DavidAU/<repo>  # or from another turbo
 3. Moves the turbo-brilliance `default_effort` / `default_effort_instruct` lines to the top. They are the only server-wide default.
 4. Selects the mode: a valid tag wins over everything. Otherwise a turbo-brilliance mode name in `reasoning_effort` (or in the defaults) applies. Anything else falls back to froggeric's effort handling.
 5. Strips the tag inside each content part, so images in a tagged message keep their `add_vision_id` numbering.
+6. Guards froggeric's reverse scan against an empty message list ([froggeric#109](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates/discussions/109)). Without it, a system-only request panics minijinja and kills vLLM's Rust frontend. The patch is skipped once upstream guards the loop itself.
 
 Every edit is anchored on upstream text that must match exactly once. If upstream restructures, `merge.py` stops and names the anchor that broke, instead of writing a corrupt template.
 
@@ -34,6 +35,7 @@ Every edit is anchored on upstream text that must match exactly once. If upstrea
 - With a tag, every turbo-brilliance mode renders exactly as turbo-brilliance does (tool-free chats).
 - Without a tag, the output equals froggeric's across a matrix of `enable_thinking`, `reasoning_effort`, `tool_call_format`, tools, multiple system prompts and `<|think_*|>` tokens.
 - Mode names in `reasoning_effort`, and edited defaults, behave as in turbo-brilliance.
+- minijinja (vLLM's Rust frontend) renders the same bytes as Jinja2, including a system-only request.
 - The turbo-brilliance-agents contract: last tag wins, a tag beats request settings, it survives tool turns, `{REASON:ioff}` gives instruct mode, and the tag is stripped.
 
 Froggeric v22 to v22.2 merge cleanly but fail the "same as turbo-brilliance" checks on multi-turn chats. Before v22.3, froggeric dropped empty `<think>` blocks from past assistant turns, and turbo-brilliance keeps them.

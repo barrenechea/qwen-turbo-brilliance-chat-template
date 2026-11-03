@@ -89,11 +89,23 @@ def extract_mode_layer(turbo_brilliance: str) -> tuple[str, str]:
     return defaults, layer
 
 
+def guard_empty_reverse_slice(froggeric: str) -> str:
+    """Guards the reverse scan against an empty _msgs, which panics minijinja in vLLM's Rust frontend."""
+    # https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates/discussions/109
+    return re.sub(
+        r"^(?<!\{%- if _msgs %\}\n)(\{%- for message in _msgs\[::-1\] %\}\n.*?^\{%- endfor %\}\n)",
+        r"{%- if _msgs %}\n\1{%- endif %}\n",
+        froggeric,
+        count=1,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+
 def merge(froggeric: str, turbo_brilliance: str, version: str) -> str:
     """Applies the merge recipe and stops at the first upstream change it cannot anchor."""
     defaults, mode_layer = extract_mode_layer(turbo_brilliance)
     preamble = extract_once(froggeric, r"^\{%- macro render_content\(.*?\{%- endmacro %\}\n\{%- if not messages %\}\n.*?\{%- endif %\}\n", "froggeric render_content + empty check")
-    merged = froggeric.replace(preamble, "")
+    merged = guard_empty_reverse_slice(froggeric.replace(preamble, ""))
     merged = replace_once(merged, r'^\{%- set template_version = "[^"]+" %\}', f'{{%- set template_version = "qwen-turbo-brilliance-chat-template-{version}" %}}', "froggeric template_version")
     merged = re.sub(r"^\{%- set _default_reasoning_effort = '\w+' %\}\n", "", merged, flags=re.MULTILINE)
     merged = replace_once(
